@@ -1,208 +1,166 @@
-<script type="text/javascript">
-    RED.nodes.registerType('entitlement',{
-        category: 'function',
-        color: '#a6bbcf',
-        defaults: {
-            name: {value:""},
-            url: {value:""},
-            useAuth: {value:false},
-            useEntitlement: {value:false}
-        },
-        inputs:1,
-        outputs:1,
-        icon: "file.png",
-        label: function() {
-            return this.name||"entitlement";
-        },
-        oneditprepare: function() {
-            $.getJSON('entitlement/'+this.id,function(data) {
-                if (data.user) {
-                    $('#node-input-fixedCredentials').prop('checked', true);
-                    $(".node-input--row").show();
-                    $('#node-config-input-user').data("v",data.user);
-                    $('#node-config-input-user').val(data.user);
+module.exports = function(RED) {
+
+    var https = require('https');
+    var querystring = require("querystring");
+    var url = require("url");
+    
+    function checkAndAuthenticate(data) {
+        if (!data.config.useAuth) {
+            data.callback(data);
+            return;
+        }
+        var node = data.node;
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+        var callPath = "/services/AuthenticationAdmin/login?username=" + data.username + "&password=" + data.password + "&remoteAddress=127.0.0.1";
+        https.get(data.config.url + callPath, function(res) {
+            res.on('data', function (payload) {
+                if (payload.toString().indexOf("false") == -1) {
+                    data.callback(data);
                 } else {
-                    $('#node-input-fixedCredentials').prop('checked', false);
-                    $(".node-input-fixedCredentials-row").hide();
-                    $('#node-config-input-user').data("v",'');
-                }
-                if (data.admin) {
-                    $('#node-input-useEntitlement').prop('checked', true);
-                    $('#node-input-useAdminCredentials').prop('checked', true);
-                    $(".node-input--row").show();
-                    $('#node-config-input-admin').data("v",data.admin);
-                    $('#node-config-input-admin').val(data.admin);
-                } else {
-                    $('#node-input-useAdminCredentials').prop('checked', false);
-                    $(".node-input-useAdminCredentials-row").hide();
-                    $('#node-config-input-admin').data("v",'');
-                }
-                if (data.hasPassword) {
-                    $('#node-input-fixedCredentials').prop('checked', true);
-                    $(".node-input-fixedCredentials-row").show();
-                    $('#node-config-input-pass').data("v",'__PWRD__');
-                    $('#node-config-input-pass').val('__PWRD__');
-                } else {
-                    $('#node-config-input-pass').data("v",'');
-                    $('#node-config-input-pass').val('');
-                }
-                if (data.hasAdminPassword) {
-                    $('#node-input-useEntitlement').prop('checked', true);
-                    $('#node-input-useAdminCredentials').prop('checked', true);
-                    $(".node-input-useEntitlement-row").show();
-                    $(".node-input-useAdminCredentials-row").show();
-                    $('#node-config-input-adminPass').data("v",'__PWRD__');
-                    $('#node-config-input-adminPass').val('__PWRD__');
-                } else {
-                    $('#node-config-input-adminPass').data("v",'');
-                    $('#node-config-input-adminPass').val('');
+                    node.warn("Unable to login as: " + data.username);
+                    setHeaders(data.req,data.res);
                 }
             });
+        }).on('error', function(e) {
+            node.warn("Error while authenticating: " + e.message);
+        });
+    }
 
-            $("#node-input-fixedCredentials").change(function() {
-                if ($(this).is(":checked")) {
-                    $(".node-input-fixedCredentials-row").show();
+    function checkAndDoEntitlement(data) {
+        if (!data.config.useEntitlement) {
+            data.callback(data);
+            return;
+        }
+        var node = data.node;
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+        var serverURL = url.parse(data.config.url);
+        var authString = "";
+        if (data.adminUsername) {
+            authString = data.adminUsername + ":" + (data.adminPassword||"");
+        } else {
+            authString = data.username + ":" + (data.password||"");
+        }
+        var options = {
+            hostname: serverURL.hostname,
+            port: serverURL.port,
+            path: "/services/EntitlementService/getBooleanDecision?subject=" + data.username + "&resource=" + data.req.url + "&action=" + data.req.method,
+            auth: authString
+        };
+        https.get(options, function(res) {
+            res.on('data', function (payload) {
+                if (res.statusCode == 500) {
+                    node.warn("Error while validating entitlement");
+                } else if (payload.toString().indexOf("false") == -1) {
+                    data.callback(data);
+                    return;
                 } else {
-                    $(".node-input-fixedCredentials-row").hide();
+                    node.warn("The user " + data.username + " is not allowed to perform the given operation");
                 }
+                setHeaders(data.req,data.res);
             });
-            $("#node-input-useEntitlement").change(function() {
-                if ($(this).is(":checked")) {
-                    $(".node-input-useEntitlement-row").show();
-                    if ($("#node-input-useAdminCredentials").is(":checked")) {
-                        $(".node-input-useAdminCredentials-row").show();
-                    }
-                } else {
-                    $(".node-input-useEntitlement-row").hide();
-                    $(".node-input-useAdminCredentials-row").hide();
-                }
-            })
-            $("#node-input-useAdminCredentials").change(function() {
-                if ($(this).is(":checked")) {
-                    $(".node-input-useAdminCredentials-row").show();
-                } else {
-                    $(".node-input-useAdminCredentials-row").hide();
-                }
-            })
-        },
-        oneditsave: function() {
-            var oldUser = $('#node-config-input-user').data("v");
-            var oldAdmin = $('#node-config-input-admin').data("v");
-            var oldPass = $('#node-config-input-pass').data("v");
-            var oldAdminPass = $('#node-config-input-adminPass').data("v");
-            var newUser = $('#node-config-input-user').val();
-            var newAdmin = $('#node-config-input-admin').val();
-            var newPass = $('#node-config-input-pass').val();
-            var newAdminPass = $('#node-config-input-adminPass').val();
+        }).on('error', function(e) {
+            node.warn("Error while validating entitlement: " + e.message);
+        });
+    }
 
-            if (!$("#node-input-fixedCredentials").is(":checked")) {
-                newUser = "";
-                newPass = "";
-            }
-            if (!$("#node-input-useEntitlement").is(":checked") || !$("#node-input-useAdminCredentials").is(":checked")) {
-                newAdmin = "";
-                newAdminPass = "";
-            }
+    function setHeaders(req,res) {
+        res.set('WWW-Authenticate', 'Basic realm="WSO2 Identity Server Login"');
+        res.send(401,req.query);
+    }
 
-            var madeChanges;
-            if (oldUser != newUser || oldPass != newPass) {
-                if (newUser == "" && newPass == "") {
-                    $.ajax({
-                        url: 'entitlement/'+this.id,
-                        type: 'DELETE',
-                        success: function(result) {}
-                    });
-                } else {
-                    var credentials = {};
-                    credentials.user = newUser;
-                    if (newPass != '__PWRD__') {
-                        credentials.password = newPass;
-                    }
-                    $.ajax({
-                        url: 'entitlement/'+this.id,
-                        type: 'POST',
-                        data: credentials,
-                        success:function(result){}
-                    });
+    function EntitlementNode(config) {
+        RED.nodes.createNode(this,config);
+        var node = this;
+        this.on('input', function(msg) {
+            var req = msg.req;
+            var res = msg.res;
+            var credentials = RED.nodes.getCredentials(config.id);
+            var authData = {};
+            if (credentials && credentials.user) {
+                authData = {
+                    username: credentials.user,
+                    password: credentials.password||""
+                };
+            } else if (req.headers.authorization) {
+                var authHeader = req.headers.authorization;
+                var credString = new Buffer(authHeader.substring("Basic".length).trim(), 'base64').toString('ascii');
+                var username = credString.split(":")[0];
+                var password = credString.split(":")[1];
+                var authData = {
+                    username: username,
+                    password: password
+                };
+            }
+            if (authData.username) {
+                authData.node = node;
+                authData.config = config;
+                authData.req = req;
+                authData.res = res;
+                if (credentials && credentials.admin) {
+                    authData.adminUsername = credentials.admin;
+                    authData.adminPassword = credentials.adminPassword||"";
                 }
-                madeChanges = true;
+                authData.callback = 
+                    function(data) {
+                        data.callback = function(data) {
+                            node.send(msg);
+                        }
+                        checkAndDoEntitlement(data);
+                    };
+                checkAndAuthenticate(authData);
+            } else if (config.useAuth || config.useEntitlement) {
+                setHeaders(req,res);
+            } else {
+                node.send(msg);
             }
-            if (oldAdmin != newAdmin || oldAdminPass != newAdminPass) {
-                if (newAdmin == "" && newAdminPass == "") {
-                    $.ajax({
-                        url: 'entitlement/'+this.id,
-                        type: 'DELETE',
-                        success: function(result) {}
-                    });
-                } else {
-                    var credentials = {};
-                    credentials.admin = newAdmin;
-                    if (newAdminPass != '__PWRD__') {
-                        credentials.adminPassword = newAdminPass;
-                    }
-                    $.ajax({
-                        url: 'entitlement/'+this.id,
-                        type: 'POST',
-                        data: credentials,
-                        success:function(result){}
-                    });
-                }
-                madeChanges = true;
-            }
-            if (madeChanges) {
-                return true;
-            }
+        });
+    }
+    RED.nodes.registerType("entitlement",EntitlementNode);
+
+    RED.httpAdmin.get('/entitlement/:id',function(req,res) {
+        var credentials = RED.nodes.getCredentials(req.params.id);
+        if (credentials) {
+            res.send(JSON.stringify({user:credentials.user,hasPassword:(credentials.password&&credentials.password!=""),admin:credentials.admin,hasAdminPassword:(credentials.adminPassword&&credentials.adminPassword!="")}));
+        } else {
+            res.send(JSON.stringify({}));
         }
     });
-</script>
 
-<script type="text/x-red" data-template-name="entitlement">
-    <div class="form-row">
-        <label for="node-input-url"><i class="fa fa-globe"></i> Server URL</label>
-        <input type="text" id="node-input-url" placeholder="https://localhost:9443">
-    </div>
-    <div class="form-row">
-        <label>&nbsp;</label>
-        <input type="checkbox" id="node-input-useAuth" style="display: inline-block; width: auto; vertical-align: top;">
-        <label for="node-input-useAuth" style="width: 70%;">Enable Authentication</label>
-    </div>
-    <div class="form-row">
-        <label>&nbsp;</label>
-        <input type="checkbox" id="node-input-fixedCredentials" style="display: inline-block; width: auto; vertical-align: top;">
-        <label for="node-input-fixedCredentials" style="width: 70%;">Hard-code Credentials?</label>
-    </div>
-    <div class="form-row node-input-fixedCredentials-row">
-        <label for="node-config-input-user"><i class="fa fa-user"></i> Username</label>
-        <input type="text" id="node-config-input-user">
-    </div>
-    <div class="form-row node-input-fixedCredentials-row">
-        <label for="node-config-input-pass"><i class="fa fa-lock"></i> Password</label>
-        <input type="password" id="node-config-input-pass">
-    </div>
-    <div class="form-row">
-        <label>&nbsp;</label>
-        <input type="checkbox" id="node-input-useEntitlement" style="display: inline-block; width: auto; vertical-align: top;">
-        <label for="node-input-useEntitlement" style="width: 70%;">Enable Entitlement</label>
-    </div>
-    <div class="form-row node-input-useEntitlement-row">
-        <label>&nbsp;</label>
-        <input type="checkbox" id="node-input-useAdminCredentials" style="display: inline-block; width: auto; vertical-align: top;">
-        <label for="node-input-useAdminCredentials" style="width: 70%;">Provide Admin Credentials?</label>
-    </div>
-    <div class="form-row node-input-useAdminCredentials-row">
-        <label for="node-config-input-admin"><i class="fa fa-user"></i> Username</label>
-        <input type="text" id="node-config-input-admin">
-    </div>
-    <div class="form-row node-input-useAdminCredentials-row">
-        <label for="node-config-input-adminPass"><i class="fa fa-lock"></i> Password</label>
-        <input type="password" id="node-config-input-adminPass">
-    </div>
-    <div class="form-row">
-        <label for="node-input-name"><i class="icon-tag"></i> Name</label>
-        <input type="text" id="node-input-name" placeholder="Name">
-    </div>
-</script>
+    RED.httpAdmin.delete('/entitlement/:id',function(req,res) {
+        RED.nodes.deleteCredentials(req.params.id);
+        res.send(200);
+    });
 
-<script type="text/x-red" data-help-name="entitlement">
-    <p>A node that performs <b>authentication</b> and <b>entitlement</b> using WSO2 Identity Server</p>
-</script>
+    RED.httpAdmin.post('/entitlement/:id',function(req,res) {
+        var body = "";
+        req.on('data', function(chunk) {
+            body+=chunk;
+        });
+        req.on('end', function(){
+            var newCreds = querystring.parse(body);
+            var credentials = RED.nodes.getCredentials(req.params.id)||{};
+            if (newCreds.user == null || newCreds.user == "") {
+                delete credentials.user;
+            } else {
+                credentials.user = newCreds.user;
+            }
+            if (newCreds.admin == null || newCreds.admin == "") {
+                delete credentials.admin;
+            } else {
+                credentials.admin = newCreds.admin;
+            }
+            if (newCreds.password == "") {
+                delete credentials.password;
+            } else {
+                credentials.password = newCreds.password||credentials.password;
+            }
+            if (newCreds.adminPassword == "") {
+                delete credentials.adminPassword;
+            } else {
+                credentials.adminPassword = newCreds.adminPassword||credentials.adminPassword;
+            }
+            RED.nodes.addCredentials(req.params.id,credentials);
+            res.send(200);
+        });
+    });
+}
