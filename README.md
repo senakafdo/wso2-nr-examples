@@ -7,3 +7,4 @@ Instructions
 ------------
 1. After installing Node-RED, change the directory to $NODE_RED_HOME/nodes
 2. Run 'git clone https://github.com/senakafdo/wso2-nr-examples wso2'
+3. Restart Node-RED by running 'node red.js' inside $NODE_RED_HOME
